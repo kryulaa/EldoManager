@@ -1,0 +1,189 @@
+-- ================================================================
+-- KIRAYU SUPABASE REPORTER
+-- ================================================================
+
+-- ⚙️ CONFIG
+local PC_NAME       = "PC3"
+local SUPABASE_URL  = "https://dolvcjxiixcgnlueuayi.supabase.co"
+local SUPABASE_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRvbHZjanhpaXhjZ25sdWV1YXlpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ1ODI3MDgsImV4cCI6MjA5MDE1ODcwOH0.srOhK7Ah55VyCOWPsje0jf4rUvDzIOPDl3kO554kVz4"
+local SEND_INTERVAL = 30
+
+local Players     = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+
+local function isLobby()
+    local map = workspace:FindFirstChild("Map")
+    if not map then return false end
+
+    local conveyors = map:FindFirstChild("Conveyors")
+    if not conveyors then return false end
+
+    return conveyors:FindFirstChild("SmartConveyor") ~= nil
+end
+
+-- ── ISO 8601 TIMESTAMP ───────────────────────────────────────────
+local function getISO8601()
+    return os.date("!%Y-%m-%dT%H:%M:%S.000Z", os.time())
+end
+
+-- ── MAIN LOOP ───────────────────────────────────────────────────
+task.spawn(function()
+
+    -- 1. Wait for game to finish loading
+    if not game:IsLoaded() then
+        game.Loaded:Wait()
+    end
+
+    -- 2. Wait for LocalPlayer — critical for auto-execute
+    local LP = Players.LocalPlayer
+    if not LP then
+        LP = Players:WaitForChild("LocalPlayer", 60)  -- fallback wait
+        if not LP then
+            warn("[Supabase] LocalPlayer never loaded, aborting.")
+            return
+        end
+    end
+
+    -- 3. Wait for PlayerGui
+    local pGui = LP:WaitForChild("PlayerGui", 60)
+    if not pGui then
+        warn("[Supabase] PlayerGui never loaded, aborting.")
+        return
+    end
+
+    -- 4. Wait for GameGui and Screen
+    local gameGui = pGui:WaitForChild("GameGui", 120)
+    if not gameGui then
+        warn("[Supabase] GameGui never loaded, aborting.")
+        return
+    end
+    gameGui:WaitForChild("Screen", 60)
+
+    -- 5. Wait for the data handler to exist (game logic loaded)
+    local function GetHandler()
+        local logic   = pGui:FindFirstChild("LogicHolder")
+        local loader  = logic and logic:FindFirstChild("ClientLoader") and logic.ClientLoader:FindFirstChild("Modules")
+        local handler = loader and loader:FindFirstChild("ClientDataHandler")
+        return handler and require(handler) or nil
+    end
+
+    -- Poll until handler is ready (up to 120s)
+    local DH = nil
+    for _ = 1, 120 do
+        DH = GetHandler()
+        if DH then break end
+        task.wait(1)
+    end
+
+    if not DH then
+        warn("[Supabase] Data handler never loaded, aborting.")
+        return
+    end
+
+    print("[Supabase] Ready — starting reporter for:", LP.Name)
+
+    -- ── SEND FUNCTION ────────────────────────────────────────────
+    local function sendData()
+        local handler = GetHandler()
+        if not handler then return end
+
+        local data = handler.GetData()
+
+        -- CURRENCIES
+        local seeds = data.Seeds or 0
+        local gems  = data.SpaceGems or 0
+
+        -- WINS
+        local wins = 0
+        pcall(function()
+            local winLabel = pGui.GameGui.Screen.Middle.Stats.Items.Frame.ScrollingFrame.GamesWon.Items.Items.Val
+            wins = tonumber(winLabel.Text:gsub(",", "")) or 0
+        end)
+        if wins == 0 then wins = data.GamesWon or data.Wins or 0 end
+
+        -- INVENTORY (NO OVERWRITE CLEAR)
+        local inventory = nil
+        local inLobby = isLobby()
+
+if inLobby then
+    pcall(function()
+        local btn = LP.PlayerGui.GameGui.Screen.Left.Sidebar.Items.Inventory.Items.Button
+        local invUI = LP.PlayerGui.GameGui.Screen.Middle.Inventory.Inventory
+
+        firesignal(btn.MouseButton1Click)
+        task.wait(0.3)
+
+        local tempInventory = {}
+
+        local itemFrame = invUI.Frame.Items.Items.ScrollingFrame
+
+        for _, frame in ipairs(itemFrame:GetChildren()) do
+            for _, unit in ipairs(frame:GetChildren()) do
+                if unit.Name:match("^unit_") then
+                    local count = unit:FindFirstChild("Frame")
+                        and unit.Frame:FindFirstChild("ImageLabel")
+                        and unit.Frame.ImageLabel:FindFirstChild("Count")
+
+                    if count then
+                        table.insert(tempInventory, {
+                            name = unit.Name,
+                            quantity = tonumber(count.Text) or count.Text
+                        })
+                    end
+                end
+            end
+        end
+
+        inventory = tempInventory
+    end)
+end
+
+        -- PAYLOAD
+        local payloadTable = {
+            username   = LP.Name,
+            pc         = PC_NAME,
+            seeds      = math.floor(seeds),
+            gems       = math.floor(gems),
+            xp         = math.floor(data.XP or 0),
+            games_won  = math.floor(wins),
+            inventory  = inventory,
+            status     = "farming",
+            updated_at = getISO8601(),
+        }
+
+        local payload = HttpService:JSONEncode(payloadTable)
+
+        local url = SUPABASE_URL .. "/rest/v1/accounts?on_conflict=username"
+        local headers = {
+            ["apikey"]        = SUPABASE_KEY,
+            ["Authorization"] = "Bearer " .. SUPABASE_KEY,
+            ["Content-Type"]  = "application/json",
+            ["Prefer"]        = "resolution=merge-duplicates"
+        }
+
+        local requestFunc = request or http_request or (syn and syn.request)
+        if requestFunc then
+            local res = requestFunc({
+                Url     = url,
+                Method  = "POST",
+                Headers = headers,
+                Body    = payload,
+            })
+            if res and res.StatusCode and res.StatusCode >= 200 and res.StatusCode < 300 then
+                print("[Supabase] Synced:", LP.Name)
+            else
+                warn("[Supabase ERROR]:", res and res.StatusCode, res and res.Body)
+            end
+        end
+    end
+
+    -- ── REPORT LOOP ──────────────────────────────────────────────
+    while true do
+        local ok, err = pcall(sendData)
+        if not ok then
+            warn("Loop Error:", tostring(err))
+        end
+        task.wait(SEND_INTERVAL)
+    end
+
+end)

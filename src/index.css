@@ -8,4 +8,35 @@
 
 body {
   @apply bg-zinc-950 text-zinc-200 antialiased;
+  scroll-behavior: smooth;
+}
+
+::selection {
+  @apply bg-orange-500/30 text-white;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-zinc-700 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-zinc-600;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: theme(colors.zinc.700) transparent;
+}
+
+:focus-visible {
+  @apply outline-none ring-2 ring-orange-500/50 ring-offset-1 ring-offset-zinc-950;
 }
