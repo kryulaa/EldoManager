@@ -1,5 +1,33 @@
 import express from "express";
 import axios from "axios";
+import speakeasy from "speakeasy";
+
+const GF_BASE = "https://production-gameflip.fingershock.com/api/v1";
+
+function gfAuth(key: string, secret: string, offsetSteps = 0) {
+  const now = Math.floor(Date.now() / 1000) + offsetSteps * 30;
+  const totp = speakeasy.totp({ secret: secret.trim(), encoding: "base32", algorithm: "sha1", digits: 6, step: 30, time: now });
+  return `GFAPI ${key.trim()}:${totp}`;
+}
+
+async function gfRequest(method: string, url: string, key: string, secret: string, config: any = {}) {
+  for (const offset of [0, -1, 1]) {
+    try {
+      const auth = gfAuth(key, secret, offset);
+      const headers = { "Content-Type": "application/json", ...config.headers, Authorization: auth };
+      return await (axios as any)[method](url, ...(config.data !== undefined ? [config.data, { ...config, headers }] : [{ ...config, headers }]));
+    } catch (e: any) {
+      if (offset !== 1 && (e.response?.status === 401 || e.response?.status === 403)) continue;
+      throw e;
+    }
+  }
+}
+
+function gfCreds(req: express.Request) {
+  const key = (req.headers["x-gf-key"] as string)?.trim();
+  const secret = (req.headers["x-gf-secret"] as string)?.trim();
+  return key && secret ? { key, secret } : null;
+}
 
 const app = express();
 app.use(express.json());
@@ -313,6 +341,183 @@ app.post("/api/eldorado/offers/item", async (req, res) => {
   } catch (e: any) {
     res.status(e.response?.status || 500).json(e.response?.data || { error: "Failed" });
   }
+});
+
+// ── Gameflip ────────────────────────────────────────────────────────────────
+app.get("/api/gameflip/me", async (req, res) => {
+  const c = gfCreds(req);
+  if (!c) return res.status(401).json({ error: "No Gameflip credentials" });
+  try {
+    const r = await gfRequest('get', `${GF_BASE}/account/me/profile`, c.key, c.secret);
+    res.json(r.data);
+  } catch (e: any) { res.status(e.response?.status || 500).json(e.response?.data || { error: "Failed" }); }
+});
+
+app.get("/api/gameflip/listings", async (req, res) => {
+  const c = gfCreds(req);
+  if (!c) return res.status(401).json({ error: "No Gameflip credentials" });
+  try {
+    const r = await gfRequest('get', `${GF_BASE}/listing`, c.key, c.secret, { params: { ...req.query, v2: true } });
+    res.json(r.data);
+  } catch (e: any) { res.status(e.response?.status || 500).json(e.response?.data || { error: "Failed" }); }
+});
+
+app.get("/api/gameflip/listing/:id", async (req, res) => {
+  const c = gfCreds(req);
+  if (!c) return res.status(401).json({ error: "No Gameflip credentials" });
+  try {
+    const r = await gfRequest('get', `${GF_BASE}/listing/${req.params.id}`, c.key, c.secret);
+    res.json(r.data);
+  } catch (e: any) { res.status(e.response?.status || 500).json(e.response?.data || { error: "Failed" }); }
+});
+
+app.patch("/api/gameflip/listing/:id", async (req, res) => {
+  const c = gfCreds(req);
+  if (!c) return res.status(401).json({ error: "No Gameflip credentials" });
+  const url = `${GF_BASE}/listing/${req.params.id}`;
+  const ops = req.body;
+
+  const doPatchOps = async (patchOps: any[]) =>
+    gfRequest('patch', url, c.key, c.secret, {
+      data: patchOps,
+      headers: { "Content-Type": "application/json-patch+json" },
+    });
+
+  const fetchStatus = async () => {
+    const cur = await gfRequest('get', url, c.key, c.secret);
+    return (cur.data?.data?.status ?? cur.data?.status) as string | undefined;
+  };
+
+  const doCycle = async () => {
+    await doPatchOps([{ op: 'replace', path: '/status', value: 'ready' }]);
+    await doPatchOps(ops);
+    const final = await doPatchOps([{ op: 'replace', path: '/status', value: 'onsale' }]);
+    return res.json(final.data);
+  };
+
+  try {
+    let status: string | undefined;
+    try { status = await fetchStatus(); } catch {}
+    if (status === 'onsale') return await doCycle();
+    const r = await doPatchOps(ops);
+    return res.json(r.data);
+  } catch (e: any) {
+    const msg: string = e.response?.data?.error?.message || '';
+    if (e.response?.status === 400 && msg.includes('onsale')) {
+      try { return await doCycle(); } catch (e2: any) {
+        return res.status(e2.response?.status || 500).json(e2.response?.data || { error: 'Failed during status cycle' });
+      }
+    }
+    res.status(e.response?.status || 500).json(e.response?.data || { error: "Failed" });
+  }
+});
+
+app.get("/api/gameflip/search", async (req, res) => {
+  const c = gfCreds(req);
+  if (!c) return res.status(401).json({ error: "No Gameflip credentials" });
+  try {
+    const r = await gfRequest('get', `${GF_BASE}/listing`, c.key, c.secret, { params: req.query });
+    res.json(r.data);
+  } catch (e: any) { res.status(e.response?.status || 500).json(e.response?.data || { error: "Failed" }); }
+});
+
+app.get("/api/gameflip/wallet", async (req, res) => {
+  const c = gfCreds(req);
+  if (!c) return res.status(401).json({ error: "No Gameflip credentials" });
+  try {
+    const r = await gfRequest('get', `${GF_BASE}/account/me/wallet_history`, c.key, c.secret, { params: { limit: 1 } });
+    res.json(r.data);
+  } catch (e: any) { res.status(e.response?.status || 500).json(e.response?.data || { error: "Failed" }); }
+});
+
+// ── ZeusX routes ─────────────────────────────────────────────────────────────
+const ZX_BASE = 'https://api.zeusx.com/v1';
+const zxHeaders = (token: string, cfClearance?: string) => ({
+  'Authorization': `Bearer ${token.replace(/^Bearer\s+/i, '')}`,
+  'Content-Type': 'application/json',
+  'accept': 'application/json, text/plain, */*',
+  'origin': 'https://zeusx.com',
+  'referer': 'https://zeusx.com/',
+  'zeusx-currency': 'USD',
+  'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
+  ...(cfClearance ? { 'cookie': `cf_clearance=${cfClearance}` } : {}),
+});
+const zxToken = (req: any) => (req.headers['x-zx-token'] as string || '').replace(/^Bearer\s+/i, '');
+const zxCf = (req: any) => (req.headers['x-zx-cf'] as string || '').trim();
+
+app.get('/api/zeusx/me', async (req, res) => {
+  const token = zxToken(req);
+  if (!token) return res.status(401).json({ error: 'No token' });
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+    await axios.get(`${ZX_BASE}/offer/my-sales-listing?pageIndex=0&pageSize=1`, { headers: zxHeaders(token) });
+    res.json({ data: { id: payload?.data?.id, exp: payload?.exp } });
+  } catch (e: any) { res.status(e.response?.status || 401).json(e.response?.data || { error: 'Invalid token' }); }
+});
+
+app.get('/api/zeusx/listings', async (req, res) => {
+  const token = zxToken(req);
+  if (!token) return res.status(401).json({ error: 'No token' });
+  try {
+    const pageIndex = parseInt(req.query.pageIndex as string || '0') || 0;
+    const r = await axios.get(`${ZX_BASE}/offer/my-sales-listing`, { headers: zxHeaders(token), params: { pageIndex } });
+    res.json(r.data);
+  } catch (e: any) { res.status(e.response?.status || 500).json(e.response?.data || { error: 'Failed' }); }
+});
+
+app.get('/api/zeusx/offer/:id', async (req, res) => {
+  const token = zxToken(req);
+  const cf = zxCf(req);
+  if (!token) return res.status(401).json({ error: 'No token' });
+  try {
+    const r = await axios.get(`${ZX_BASE}/offer/${req.params.id}`, { headers: zxHeaders(token, cf) });
+    res.json(r.data);
+  } catch (e: any) { res.status(e.response?.status || 500).json(e.response?.data || { error: 'Failed' }); }
+});
+
+app.put('/api/zeusx/offer/:id', async (req, res) => {
+  const token = zxToken(req);
+  const cf = zxCf(req);
+  if (!token) return res.status(401).json({ error: 'No token' });
+  try {
+    let full: any = req.body._fullOffer;
+    if (!full || typeof full !== 'object' || !full.id) {
+      const offerRes = await axios.get(`${ZX_BASE}/offer/${req.params.id}`, { headers: zxHeaders(token, cf) });
+      full = offerRes.data?.data;
+      if (!full || typeof full !== 'object' || !full.id) {
+        return res.status(502).json({ error: 'Could not fetch offer from ZeusX. Update cf_clearance and try again.' });
+      }
+    }
+    const resolvedScId = full.service_category_id || full.service_category || full.service_category_base_id;
+    const offer = {
+      ...full,
+      id: full.id || full.offer_id,
+      service_category_id: resolvedScId,
+      service_category: resolvedScId,
+      offer_base_attribute_value: (full.attribute_values || []).map((av: any) => ({
+        base_attribute_id: av.base_attribute_id,
+        base_attribute_value: av.base_attribute_value,
+      })),
+      agreeTerm: true,
+      removing_photo_ids: [],
+      photos: [],
+      uploaded_photos: [],
+    };
+    const r = await axios.put(`${ZX_BASE}/offer/${req.params.id}/update`, { offer }, { headers: zxHeaders(token, cf) });
+    res.json(r.data);
+  } catch (e: any) {
+    console.error('[ZX PUT] error:', e.response?.status, JSON.stringify(e.response?.data));
+    res.status(e.response?.status || 500).json(e.response?.data || { error: 'Failed' });
+  }
+});
+
+app.get('/api/zeusx/search', async (req, res) => {
+  const token = zxToken(req);
+  if (!token) return res.status(401).json({ error: 'No token' });
+  try {
+    const r = await axios.get(`${ZX_BASE}/offer/sales-listing`, { headers: zxHeaders(token), params: { offer_status: 'CREATED', sort: 'listed_price:asc', pageSize: 50, ...req.query } });
+    res.json(r.data);
+  } catch (e: any) { res.status(e.response?.status || 500).json(e.response?.data || { error: 'Failed' }); }
 });
 
 export default app;

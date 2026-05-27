@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>ZeusX API Sniffer</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0f0f17; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 32px; }
+    h1 { color: #a78bfa; font-size: 22px; margin-bottom: 6px; }
+    p { color: #94a3b8; font-size: 14px; margin-bottom: 24px; }
+    .steps { display: flex; flex-direction: column; gap: 20px; max-width: 640px; }
+    .step { background: #1e1e2e; border: 1px solid #2d2d3d; border-radius: 12px; padding: 20px; }
+    .step h3 { color: #c4b5fd; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
+    .step p { margin-bottom: 12px; font-size: 13px; }
+    code { background: #2d2d3d; color: #86efac; padding: 2px 6px; border-radius: 4px; font-size: 12px; font-family: monospace; }
+    .bm-link { display: inline-block; background: #7c3aed; color: white; padding: 10px 18px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 14px; margin-bottom: 8px; }
+    .bm-link:hover { background: #6d28d9; }
+    .hint { color: #64748b; font-size: 12px; margin-top: 6px; }
+    .console-btn { background: #1e293b; border: 1px solid #334155; color: #94a3b8; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; transition: all .15s; }
+    .console-btn:hover { background: #334155; color: white; }
+    textarea { width: 100%; height: 80px; background: #0f172a; border: 1px solid #2d2d3d; border-radius: 6px; color: #86efac; font-family: monospace; font-size: 11px; padding: 8px; resize: none; margin-bottom: 8px; }
+    .tag { display: inline-block; background: #134e4a; color: #34d399; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-left: 8px; }
+    .tag-blue { display: inline-block; background: #0c2340; color: #38bdf8; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-left: 8px; }
+  </style>
+</head>
+<body>
+  <h1>ZeusX API Sniffer <span class="tag">DEV TOOL</span></h1>
+  <p>Captures API calls + listing response data — shows service_category fields and PUT body.</p>
+  <div class="steps">
+    <div class="step">
+      <h3>Step 1 — Add bookmarklet</h3>
+      <p>Drag the button below to your Bookmarks Bar (<code>Ctrl+Shift+B</code> to show it).</p>
+      <a class="bm-link" id="bm-link" href="#">⚡ ZX Sniffer</a>
+      <p class="hint">Or skip this and paste the console script instead (Step 2).</p>
+    </div>
+    <div class="step">
+      <h3>Step 2 — Go to ZeusX &amp; activate</h3>
+      <p>Navigate to <code>zeusx.com/seller/manage-listings</code> (your listings page). Then click the bookmarklet <em>or</em> open DevTools (<code>F12</code>) and paste this into the Console:</p>
+      <textarea id="ta" readonly></textarea>
+      <button class="console-btn" id="copy-btn">Copy console script</button>
+    </div>
+    <div class="step">
+      <h3>Step 3 — Reload &amp; edit</h3>
+      <p>After activating, <strong>reload the page once</strong> so the sniffer captures the listing GET response. Then open a listing editor and save. Copy the <span style="color:#38bdf8">blue LISTING FIELDS</span> entry and the <span style="color:#c4b5fd">purple PUT body</span> entry and paste them here.</p>
+    </div>
+  </div>
+
+  <script id="sniffer-source">
+  function __zxSniffer() {
+    if (window.__zxSnifferActive) { console.log('[ZX Sniffer] already active'); return; }
+    window.__zxSnifferActive = true;
+
+    /* ── panel ── */
+    var panel = document.createElement('div');
+    panel.id = '__zxsp';
+    panel.style.cssText = [
+      'position:fixed','top:16px','right:16px','z-index:2147483647',
+      'width:560px','max-height:85vh','overflow-y:auto',
+      'background:#0f0f17','border:1.5px solid #7c3aed','border-radius:12px',
+      'padding:12px','font-family:monospace','font-size:11px','color:#e2e8f0',
+      'box-shadow:0 8px 32px rgba(0,0,0,.7)'
+    ].join(';');
+
+    var hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;cursor:move;user-select:none;';
+
+    var title = document.createElement('span');
+    title.textContent = '⚡ ZX Sniffer';
+    title.style.cssText = 'color:#a78bfa;font-weight:700;font-size:13px;';
+
+    var btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:6px;';
+
+    var clearBtn = document.createElement('button');
+    clearBtn.textContent = 'Clear';
+    clearBtn.style.cssText = 'background:#1e293b;border:1px solid #334155;color:#94a3b8;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px;';
+    clearBtn.addEventListener('click', function() { logEl.innerHTML = ''; });
+
+    var closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = 'background:#7c3aed;border:none;color:white;padding:2px 8px;border-radius:4px;cursor:pointer;';
+    closeBtn.addEventListener('click', function() { panel.remove(); window.__zxSnifferActive = false; });
+
+    btnRow.appendChild(clearBtn);
+    btnRow.appendChild(closeBtn);
+    hdr.appendChild(title);
+    hdr.appendChild(btnRow);
+
+    var logEl = document.createElement('div');
+    panel.appendChild(hdr);
+    panel.appendChild(logEl);
+    document.body.appendChild(panel);
+
+    /* drag */
+    var drag = false, ox = 0, oy = 0;
+    hdr.addEventListener('mousedown', function(e) { drag = true; ox = e.clientX - panel.offsetLeft; oy = e.clientY - panel.offsetTop; });
+    document.addEventListener('mousemove', function(e) { if (!drag) return; panel.style.left = (e.clientX - ox) + 'px'; panel.style.top = (e.clientY - oy) + 'px'; panel.style.right = 'auto'; });
+    document.addEventListener('mouseup', function() { drag = false; });
+
+    /* ── entry renderer ── */
+    function makeEntry(label, labelColor, bgColor, borderColor, bodyStr, autoOpen) {
+      var entry = document.createElement('div');
+      entry.style.cssText = 'margin-bottom:8px;padding:10px;border-radius:8px;background:' + bgColor + ';border-left:3px solid ' + borderColor + ';';
+
+      var lbl = document.createElement('div');
+      lbl.textContent = label;
+      lbl.style.cssText = 'font-weight:700;margin-bottom:4px;color:' + labelColor + ';';
+      entry.appendChild(lbl);
+
+      if (bodyStr) {
+        var details = document.createElement('details');
+        if (autoOpen) details.open = true;
+
+        var summary = document.createElement('summary');
+        summary.textContent = 'Data';
+        summary.style.cssText = 'cursor:pointer;color:#64748b;margin:2px 0 4px;';
+
+        var pre = document.createElement('pre');
+        pre.textContent = bodyStr;
+        pre.style.cssText = 'margin:0;overflow:auto;max-height:300px;background:#0a0a14;padding:8px;border-radius:6px;color:#86efac;font-size:10px;white-space:pre-wrap;';
+
+        var cp = document.createElement('button');
+        cp.textContent = '📋 Copy';
+        cp.style.cssText = 'margin-top:4px;background:#1e293b;border:1px solid #334155;color:#94a3b8;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px;';
+        (function(btn, txt) {
+          btn.addEventListener('click', function() {
+            navigator.clipboard.writeText(txt);
+            btn.textContent = 'Copied!';
+            setTimeout(function() { btn.textContent = '📋 Copy'; }, 1500);
+          });
+        })(cp, bodyStr);
+
+        details.appendChild(summary);
+        details.appendChild(pre);
+        details.appendChild(cp);
+        entry.appendChild(details);
+      }
+
+      logEl.insertBefore(entry, logEl.firstChild);
+      return entry;
+    }
+
+    /* ── listing response handler ── */
+    function handleListingResponse(parsed) {
+      var sales = (parsed && parsed.data && parsed.data.sales) || [];
+      if (!sales.length) return;
+      var first = sales[0];
+      /* Extract all service_category-related keys + attribute_values from first sale */
+      var scFields = {};
+      Object.keys(first).forEach(function(k) {
+        if (k.indexOf('service_category') !== -1 || k.indexOf('attribute') !== -1 || k === 'game_id' || k === 'offer_id' || k === 'id') {
+          scFields[k] = first[k];
+        }
+      });
+      var allKeys = Object.keys(first).join(', ');
+      var out = 'FIRST SALE KEYS:\n' + allKeys + '\n\nSERVICE CATEGORY + ATTRIBUTE FIELDS:\n' + JSON.stringify(scFields, null, 2);
+      console.log('[ZX Sniffer] listing first sale keys:', allKeys);
+      console.log('[ZX Sniffer] service_category fields:', scFields);
+      makeEntry('GET /my-sales-listing  ← LISTING FIELDS', '#38bdf8', '#0c1829', '#0ea5e9', out, true);
+    }
+
+    /* ── PUT update handler ── */
+    function handlePutUpdate(url, reqBody) {
+      var short = url.replace('https://api.zeusx.com/v1', '');
+      var parsed = null;
+      try { parsed = typeof reqBody === 'string' ? JSON.parse(reqBody) : reqBody; } catch(e) {}
+      var bodyStr = parsed ? JSON.stringify(parsed, null, 2) : (reqBody || '');
+      console.log('[ZX Sniffer] PUT /update body:', parsed);
+      makeEntry('PUT ' + short + '  ← EDIT BODY', '#c4b5fd', '#1e0a3c', '#a78bfa', bodyStr, true);
+    }
+
+    /* ── generic request entry ── */
+    function addEntry(method, url, reqBody) {
+      var isUpdate = url.indexOf('/update') !== -1;
+      if (isUpdate) { handlePutUpdate(url, reqBody); return; }
+      var short = url.replace('https://api.zeusx.com/v1', '');
+      var parsed = null;
+      try { parsed = typeof reqBody === 'string' ? JSON.parse(reqBody) : reqBody; } catch(e) {}
+      var bodyStr = parsed ? JSON.stringify(parsed, null, 2) : (reqBody || '');
+      makeEntry(method + ' ' + short, '#64748b', '#0f172a', '#334155', bodyStr, false);
+    }
+
+    /* ── intercept XHR ── */
+    var _open = XMLHttpRequest.prototype.open;
+    var _send = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(m, u) {
+      this.__zx = { m: m, u: String(u) };
+      return _open.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.send = function(body) {
+      if (this.__zx && this.__zx.u.indexOf('api.zeusx.com') !== -1) {
+        var self = this;
+        var m = this.__zx.m, u = this.__zx.u, b = body;
+        this.addEventListener('loadend', function() {
+          addEntry(m, u, b);
+          /* also parse listing GET response */
+          if (u.indexOf('my-sales-listing') !== -1 && self.responseText) {
+            try { handleListingResponse(JSON.parse(self.responseText)); } catch(e) {}
+          }
+        });
+      }
+      return _send.apply(this, arguments);
+    };
+
+    /* ── intercept fetch ── */
+    var _fetch = window.fetch;
+    window.fetch = function(url, opts) {
+      opts = opts || {};
+      var urlStr = typeof url === 'string' ? url : (url && url.url) || '';
+      if (urlStr.indexOf('api.zeusx.com') === -1) return _fetch.apply(this, arguments);
+
+      var p = _fetch.apply(this, arguments);
+      p.then(function(res) {
+        var res2 = res.clone();
+        addEntry(opts.method || 'GET', urlStr, opts.body);
+        if (urlStr.indexOf('my-sales-listing') !== -1) {
+          res2.json().then(function(j) { handleListingResponse(j); }).catch(function(){});
+        }
+        return res;
+      });
+      return p;
+    };
+
+    console.log('[ZX Sniffer] ✓ active — reload the page to capture listing data, then edit a listing');
+  }
+  </script>
+
+  <script>
+    var src = document.getElementById('sniffer-source').textContent.trim();
+    var body = src.replace(/^function\s+__zxSniffer\s*\(\)\s*\{/, '').replace(/\}$/, '').trim();
+    var iife = '(function(){' + body + '})();';
+
+    document.getElementById('ta').value = iife;
+    document.getElementById('bm-link').href = 'javascript:' + encodeURIComponent(iife);
+
+    document.getElementById('copy-btn').addEventListener('click', function() {
+      navigator.clipboard.writeText(iife).then(function() {
+        var btn = document.getElementById('copy-btn');
+        btn.textContent = 'Copied!';
+        setTimeout(function() { btn.textContent = 'Copy console script'; }, 2000);
+      });
+    });
+  </script>
+</body>
+</html>
