@@ -960,7 +960,8 @@ const ZXEditModal = ({ sale, token, cfClearance, onClose, onUpdate }: { sale: ZX
 const ZXMarketModal = ({ sale, token, userId, onClose, onEdit }: {
   sale: ZXSale; token: string; userId: string; onClose: () => void; onEdit: () => void;
 }) => {
-  const photo = sale.photos?.[0]?.url ?? sale.uploaded_photos?.[0]?.url ?? null;
+  const saleAny = sale as any;
+  const photo = saleAny.photos?.[0]?.url ?? saleAny.uploaded_photos?.[0]?.url ?? null;
   const statusColor = sale.offer_status === 'CREATED' && !sale.is_hidden ? 'text-emerald-400' : 'text-zinc-500';
   const statusLabel = sale.is_hidden ? 'Hidden' : sale.offer_status === 'CREATED' ? 'Active' : sale.offer_status;
 
@@ -985,11 +986,11 @@ const ZXMarketModal = ({ sale, token, userId, onClose, onEdit }: {
             <p className="text-white font-semibold text-sm leading-snug line-clamp-2">{sale.title}</p>
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
               <span className="text-zinc-400">Price: <span className="text-white font-bold">${sale.listed_price?.toFixed(2)}</span></span>
-              <span className="text-zinc-400">Qty: <span className="text-white font-bold">{sale.quantity ?? sale.qty_avail ?? '—'}</span></span>
+              <span className="text-zinc-400">Qty: <span className="text-white font-bold">{sale.quantity ?? (sale as any).qty_avail ?? '—'}</span></span>
               <span className={`font-semibold ${statusColor}`}>{statusLabel}</span>
             </div>
-            {sale.description && (
-              <p className="mt-2 text-[11px] text-zinc-500 line-clamp-3">{sale.description}</p>
+            {(sale as any).description && (
+              <p className="mt-2 text-[11px] text-zinc-500 line-clamp-3">{(sale as any).description}</p>
             )}
           </div>
         </div>
@@ -1846,9 +1847,542 @@ const GameflipDashboard = () => {
   );
 };
 
+// ── G2G Types ─────────────────────────────────────────────────────────────────
+interface G2GOffer {
+  offer_id: string;
+  seller_id?: string;
+  title?: string;
+  description?: string;
+  status?: 'live' | 'delisted' | 'requires_modification' | string;
+  unit_price?: number;
+  currency?: string;
+  offer_currency?: string;
+  unit_price_in_usd?: number;
+  converted_unit_price?: number;
+  display_price?: string;
+  available_qty?: number;
+  qty?: number;              // sls full-offer field name
+  api_qty?: number;
+  min_qty?: number;
+  low_stock_alert_qty?: number;
+  cat_id?: string;
+  brand_id?: string;
+  service_id?: string;
+  delivery_mode?: string[];
+  delivery_speed?: string;
+  delivery_method_ids?: string[];
+  delivery_speed_details?: { min: number; max: number; delivery_time: number }[];
+  sales_territory_settings?: { settings_type: string; countries: string[] };
+  package_settings?: any[];
+  other_pricing?: any[];
+  wholesale_details?: any[];
+  other_wholesale_details?: any[];
+  // sls.g2g.com image / attribute fields
+  primary_img_attributes?: string[];
+  offer_title_collection_tree?: string[];
+  offer_attributes?: { collection_id: string; dataset_id: string }[];
+  username?: string;
+  created_at?: number;
+  updated_at?: number;
+}
+
+// ── G2G Market Modal (competitor prices) ─────────────────────────────────────
+const G2GMarketModal = ({ offer, sellerId, onClose, onEdit }: {
+  offer: G2GOffer; sellerId: string; onClose: () => void; onEdit: () => void;
+}) => {
+  const [competitors, setCompetitors] = useState<G2GOffer[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const tree = offer.offer_title_collection_tree;
+    const params: any = {};
+    if (tree && tree.length >= 2) params.fa = `${tree[0]}:${tree[1]}`;
+    if (offer.title) params.q = offer.title;
+    if (offer.brand_id) params.brand_id = offer.brand_id;
+    if (!params.fa && !params.q) { setLoading(false); setError('Not enough data to search market'); return; }
+    axios.get('/api/g2g/market', { params })
+      .then(r => {
+        const results: G2GOffer[] = r.data?.payload?.results ?? [];
+        setCompetitors(results.sort((a, b) => (a.unit_price ?? 0) - (b.unit_price ?? 0)));
+      })
+      .catch(e => setError(e.response?.data?.error ?? 'Failed to load market prices'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const cur = offer.offer_currency ?? offer.currency ?? 'USD';
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={onClose}>
+      <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+        onClick={e => e.stopPropagation()}
+        className="bg-zinc-950 border border-zinc-800 rounded-3xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col shadow-2xl">
+        <div className="p-5 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/50">
+          <div>
+            <h2 className="text-base font-bold text-white">Market Prices</h2>
+            <p className="text-xs text-zinc-500 mt-0.5 truncate max-w-xs">{offer.title}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={onEdit} className="px-3 py-1.5 text-xs font-semibold bg-violet-500 hover:bg-violet-600 text-white rounded-lg transition-all">Edit My Price</button>
+            <button onClick={onClose} className="p-1.5 hover:bg-zinc-800 rounded-lg transition-colors text-zinc-400 hover:text-white"><X className="w-5 h-5" /></button>
+          </div>
+        </div>
+        <div className="flex-grow overflow-y-auto p-4">
+          {loading ? (
+            <div className="space-y-2">{Array.from({length:6}).map((_,i)=><div key={i} className="h-14 bg-zinc-900 rounded-xl animate-pulse"/>)}</div>
+          ) : error ? (
+            <p className="text-red-400 text-sm text-center py-10">{error}</p>
+          ) : competitors.length === 0 ? (
+            <p className="text-zinc-500 text-sm text-center py-10">No other listings found</p>
+          ) : (
+            <div className="space-y-2">
+              {competitors.map((c, i) => {
+                const isMe = c.seller_id === sellerId || c.username === 'KrayonStore';
+                const cCur = c.offer_currency ?? c.currency ?? cur;
+                return (
+                  <div key={c.offer_id} className={cn(
+                    "flex items-center justify-between px-4 py-3 rounded-xl border",
+                    isMe ? "bg-violet-500/10 border-violet-500/30" : "bg-zinc-900 border-zinc-800"
+                  )}>
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className="text-xs font-bold text-zinc-500 w-5 text-right flex-shrink-0">#{i+1}</span>
+                      <div className="min-w-0">
+                        <p className={cn("text-xs font-semibold truncate", isMe ? "text-violet-400" : "text-zinc-300")}>
+                          {c.username ?? c.seller_id ?? 'Seller'} {isMe && <span className="text-[10px] bg-violet-500 text-white px-1.5 py-0.5 rounded-full ml-1">YOU</span>}
+                        </p>
+                        <p className="text-[10px] text-zinc-600">{c.available_qty ?? 0} in stock</p>
+                      </div>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className={cn("text-sm font-black", isMe ? "text-violet-400" : "text-white")}>{cCur} {(c.unit_price ?? 0).toLocaleString()}</p>
+                      {c.display_price && <p className="text-[10px] text-zinc-500">≈ ${c.display_price}</p>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
+// ── G2G Edit Modal ────────────────────────────────────────────────────────────
+const G2GEditModal = ({ offer, g2gJwt, g2gUser, onClose, onUpdate, onNeedJwt }: {
+  offer: G2GOffer; g2gJwt: string; g2gUser: string;
+  onClose: () => void; onUpdate: () => void; onNeedJwt: () => void;
+}) => {
+  const [price, setPrice] = useState(String(offer.unit_price ?? ''));
+  const [qty, setQty] = useState(String(offer.available_qty ?? offer.qty ?? ''));
+  const [fullOffer, setFullOffer] = useState<G2GOffer | null>(null);
+  const [fetching, setFetching] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const cur = offer.offer_currency ?? offer.currency ?? 'PHP';
+
+  // Use listing data directly — we already have it, no extra GET needed
+  useEffect(() => {
+    setFullOffer(offer as any);
+    setFetching(false);
+  }, []);
+
+  const handleSave = async () => {
+    if (!g2gJwt) { onNeedJwt(); return; }
+    const src = fullOffer ?? offer;
+    setLoading(true); setError(null);
+    try {
+      const newPrice = parseFloat(price);
+      const newQty = parseInt(qty);
+      if (isNaN(newPrice) || isNaN(newQty)) { setError('Invalid price or quantity'); setLoading(false); return; }
+
+      // Map delivery_mode → delivery_method_ids (from sniffer, face_to_face = this UUID)
+      const DELIVERY_METHOD_MAP: Record<string, string> = {
+        'face_to_face_trade': '31106818-567a-4057-b3b9-6a17409d5a4e',
+        'gifting': 'cbc1397c-5286-4f84-97e0-c0ecef5b8a44',
+      };
+      const deliveryMethodIds = (src as any).delivery_method_ids
+        ?? ((src as any).delivery_mode ?? []).map((m: string) => DELIVERY_METHOD_MAP[m]).filter(Boolean);
+
+      // Build offer_attributes from offer_title_collection_tree
+      // dataset_id is the sub-attribute; use a placeholder if unknown — G2G may accept without it
+      const offerAttributes = (src as any).offer_attributes
+        ?? ((src as any).offer_title_collection_tree ?? []).map((colId: string) => ({ collection_id: colId, dataset_id: '' }));
+
+      // Build exact body matching what G2G website sends (from sniffer)
+      const body: any = {
+        seller_id: src.seller_id ?? g2gUser,
+        delivery_method_ids: deliveryMethodIds,
+        delivery_speed: (src as any).delivery_speed ?? 'manual',
+        delivery_speed_details: (src as any).delivery_speed_details ?? [{ min: 1, max: 2147483647, delivery_time: 20 }],
+        qty: newQty,
+        description: src.description ?? src.title ?? '',
+        currency: cur,
+        min_qty: src.min_qty ?? 1,
+        low_stock_alert_qty: src.low_stock_alert_qty ?? 0,
+        sales_territory_settings: (src as any).sales_territory_settings ?? { settings_type: 'global', countries: [] },
+        package_settings: (src as any).package_settings ?? [],
+        title: src.title ?? '',
+        offer_attributes: offerAttributes,
+        unit_price: newPrice,
+        other_pricing: (src as any).other_pricing ?? [],
+        wholesale_details: (src as any).wholesale_details ?? [],
+        other_wholesale_details: (src as any).other_wholesale_details ?? [],
+      };
+
+      console.log('[G2G PATCH] body:', JSON.stringify(body));
+      const r = await axios.patch(`/api/g2g/offer-sls/${offer.offer_id}`, body, {
+        headers: { 'x-g2g-jwt': g2gJwt },
+      });
+      if (r.data?.code && r.data.code !== 2000 && r.data.code !== '2000' && r.data.code !== '20000001') {
+        throw new Error(r.data?.message ?? JSON.stringify(r.data));
+      }
+      onUpdate();
+      onClose();
+    } catch (e: any) {
+      const msg = e.response?.data?.message ?? e.response?.data?.error ?? e.message ?? 'Update failed';
+      if (e.response?.status === 401) { setError('Session token expired — paste a fresh one'); onNeedJwt(); }
+      else setError(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+      <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+        className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="text-white font-bold text-lg">Edit G2G Offer</h3>
+          <button onClick={onClose} className="text-zinc-500 hover:text-white transition-colors"><X className="w-5 h-5" /></button>
+        </div>
+        <p className="text-zinc-400 text-sm mb-4 truncate">{offer.title || offer.offer_id}</p>
+        {!g2gJwt && (
+          <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-400 text-sm">
+            Session token required — click "Update Token" in the header.
+          </div>
+        )}
+        {error && <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm break-all">{error}</div>}
+        {fetching ? (
+          <div className="h-24 flex items-center justify-center text-zinc-500 text-sm">Loading offer data…</div>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-medium text-zinc-500 uppercase tracking-wider mb-1.5">Unit Price ({cur})</label>
+              <input type="number" step="0.01" min="0" value={price} onChange={e => setPrice(e.target.value)}
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500 transition-all" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-zinc-500 uppercase tracking-wider mb-1.5">Quantity</label>
+              <input type="number" min="0" value={qty} onChange={e => setQty(e.target.value)}
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500 transition-all" />
+            </div>
+          </div>
+        )}
+        <div className="flex gap-3 mt-6">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-600 transition-all text-sm font-medium">Cancel</button>
+          <button onClick={handleSave} disabled={loading || fetching || !g2gJwt}
+            className="flex-1 py-2.5 rounded-xl bg-violet-500 hover:bg-violet-600 disabled:opacity-50 text-white font-semibold transition-all text-sm">
+            {loading ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
+// ── G2G Offer Card ────────────────────────────────────────────────────────────
+function g2gImageUrl(offer: G2GOffer): string | null {
+  const attrId = offer.primary_img_attributes?.[0] ?? offer.offer_title_collection_tree?.[1];
+  if (attrId) return `https://assets.g2g.com/offer_title_collection/${attrId}.png`;
+  if (offer.brand_id) return `https://assets.g2g.com/brand/${offer.brand_id}.jpg`;
+  return null;
+}
+
+const G2GOfferCard = ({ offer, onEdit, onMarket }: { offer: G2GOffer; onEdit: () => void; onMarket: () => void }) => {
+  const [imgErr, setImgErr] = useState(false);
+  const imgUrl = imgErr ? null : g2gImageUrl(offer);
+  const cur = offer.offer_currency ?? offer.currency ?? 'USD';
+  const price = offer.unit_price ?? 0;
+  const usdPrice = offer.display_price ?? (offer.unit_price_in_usd ? offer.unit_price_in_usd.toFixed(2) : null);
+  const qty = offer.available_qty ?? 0;
+  const statusColor = offer.status === 'live'
+    ? 'text-green-400 bg-green-500/20 border-green-500/30'
+    : offer.status === 'delisted'
+    ? 'text-zinc-500 bg-zinc-800/50 border-zinc-700/30'
+    : 'text-amber-400 bg-amber-500/20 border-amber-500/30';
+
+  return (
+    <motion.div layout initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} whileHover={{ y: -2 }}
+      className="group bg-zinc-900 border border-zinc-800 hover:border-violet-500/50 rounded-xl overflow-hidden transition-all flex flex-col cursor-pointer"
+      onClick={onMarket}>
+      <div className="relative aspect-square overflow-hidden bg-zinc-950">
+        {imgUrl ? (
+          <img src={imgUrl} alt={offer.title} onError={() => setImgErr(true)}
+            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <Package className="w-8 h-8 text-zinc-800" />
+          </div>
+        )}
+        <div className="absolute top-2 right-2">
+          <span className={cn("text-[9px] font-black px-2 py-0.5 rounded-full border uppercase tracking-wider backdrop-blur-md shadow-lg", statusColor)}>
+            {offer.status ?? 'live'}
+          </span>
+        </div>
+        <div className="absolute top-2 left-2">
+          <button onClick={e => { e.stopPropagation(); onEdit(); }}
+            className="p-1 bg-zinc-800/80 hover:bg-violet-500 text-zinc-400 hover:text-white rounded-md transition-all backdrop-blur-sm" title="Edit price/qty">
+            <Edit2 className="w-2.5 h-2.5" />
+          </button>
+        </div>
+      </div>
+      <div className="p-2 flex flex-col flex-grow">
+        <h3 className="text-[11px] font-bold text-white line-clamp-2 group-hover:text-violet-400 transition-colors leading-tight mb-1">
+          {offer.title || offer.offer_id}
+        </h3>
+        <div className="mt-auto pt-1.5 border-t border-zinc-800/50">
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col">
+              <span className="text-[8px] text-zinc-500 font-bold uppercase tracking-widest">Price</span>
+              <span className="text-xs font-black text-violet-500">{cur} {price.toLocaleString()}</span>
+              {usdPrice && <span className="text-[9px] text-zinc-500">≈ ${usdPrice}</span>}
+            </div>
+            <div className="text-right">
+              <span className="text-[8px] text-zinc-500 font-bold uppercase tracking-widest">Stock</span>
+              <div className="text-[10px] font-bold text-zinc-300">{qty.toLocaleString()}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+};
+
+// ── G2G Dashboard ─────────────────────────────────────────────────────────────
+const G2GDashboard = () => {
+  const [g2gKey, setG2gKey] = useState(() => localStorage.getItem('g2g_key') || '');
+  const [g2gSecret, setG2gSecret] = useState(() => localStorage.getItem('g2g_secret') || '');
+  const [g2gUser, setG2gUser] = useState(() => localStorage.getItem('g2g_user') || '');
+  const [g2gJwt, setG2gJwt] = useState(() => localStorage.getItem('g2g_jwt') || '');
+  const [keyInput, setKeyInput] = useState('');
+  const [secretInput, setSecretInput] = useState('');
+  const [userInput, setUserInput] = useState('');
+  const [showJwtInput, setShowJwtInput] = useState(false);
+  const [jwtInput, setJwtInput] = useState('');
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [offers, setOffers] = useState<G2GOffer[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [editingOffer, setEditingOffer] = useState<G2GOffer | null>(null);
+  const [marketOffer, setMarketOffer] = useState<G2GOffer | null>(null);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+
+  const saveJwt = () => {
+    const t = jwtInput.trim();
+    if (!t) return;
+    setG2gJwt(t); localStorage.setItem('g2g_jwt', t);
+    setJwtInput(''); setShowJwtInput(false);
+  };
+
+  const fetchOffers = async (p = 1, userOverride?: string) => {
+    setLoading(true); setError(null);
+    const hdrs = { 'x-g2g-key': g2gKey, 'x-g2g-secret': g2gSecret, 'x-g2g-user': userOverride ?? g2gUser };
+    try {
+      const r = await axios.get('/api/g2g/offers', { headers: hdrs, params: { page: p, page_size: 50 } });
+      const payload = r.data?.payload;
+      // sls.g2g.com returns { payload: { results: [...], total_result: N } }
+      const list: G2GOffer[] = Array.isArray(payload?.results) ? payload.results
+        : Array.isArray(payload) ? payload
+        : [];
+      // Auto-capture seller_id from first offer if we don't have it yet
+      if (!g2gUser && list.length > 0 && list[0].seller_id) {
+        const sid = list[0].seller_id;
+        setG2gUser(sid);
+        localStorage.setItem('g2g_user', sid);
+      }
+      const total: number = payload?.total_result ?? payload?.max_total_result ?? 0;
+      if (p === 1) setOffers(list); else setOffers(prev => [...prev, ...list]);
+      setHasMore(list.length > 0 && (p * 48) < total);
+      setPage(p);
+    } catch (e: any) {
+      const msg = e.response?.data?.message ?? e.response?.data?.error ?? e.message ?? 'Failed to fetch offers';
+      setError(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    } finally { setLoading(false); }
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const key = keyInput.trim(); const secret = secretInput.trim(); const user = userInput.trim();
+    if (!key || !secret) return;
+    setLoading(true); setError(null);
+    try {
+      const r = await axios.get('/api/g2g/me', { headers: { 'x-g2g-key': key, 'x-g2g-secret': secret, 'x-g2g-user': user } });
+      const userId: string = user || r.data?.payload?.seller_id || r.data?.payload?.user_id || '';
+      setG2gKey(key); setG2gSecret(secret); setG2gUser(userId);
+      localStorage.setItem('g2g_key', key);
+      localStorage.setItem('g2g_secret', secret);
+      localStorage.setItem('g2g_user', userId);
+      setLoggedIn(true);
+      await fetchOffers(1, userId);
+    } catch (e: any) {
+      setError(e.response?.data?.message ?? e.response?.data?.error ?? 'Invalid credentials');
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (g2gKey && g2gSecret) { setLoggedIn(true); }
+  }, []);
+
+  useEffect(() => {
+    if (loggedIn && g2gKey) fetchOffers();
+  }, [loggedIn]);
+
+  const handleLogout = () => {
+    setLoggedIn(false); setOffers([]); setG2gKey(''); setG2gSecret(''); setG2gUser('');
+    localStorage.removeItem('g2g_key'); localStorage.removeItem('g2g_secret'); localStorage.removeItem('g2g_user');
+  };
+
+  if (!loggedIn) {
+    return (
+      <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-4">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+          className="bg-zinc-900 border border-zinc-800 rounded-3xl p-8 w-full max-w-md shadow-2xl">
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 bg-violet-500/10 rounded-2xl flex items-center justify-center mb-4 border border-violet-500/20 mx-auto">
+              <Package className="w-8 h-8 text-violet-500" />
+            </div>
+            <h1 className="text-2xl font-bold text-white tracking-tight">G2G</h1>
+            <p className="text-zinc-400 text-sm mt-1">Enter your Seller API credentials</p>
+          </div>
+          <div className="mb-5 p-3 bg-zinc-800/50 border border-zinc-700/50 rounded-xl text-xs text-zinc-400 space-y-1.5">
+            <p className="font-semibold text-zinc-300">Where to find credentials:</p>
+            <p>Go to <span className="text-violet-400 font-mono">g2g.com</span> → Seller Hub → API Settings</p>
+            <p><span className="text-zinc-200 font-semibold">Account ID</span> is shown on that same page (numeric ID)</p>
+          </div>
+          {error && <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-xs">{error}</div>}
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label className="block text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">API Key</label>
+              <input value={keyInput} onChange={e => setKeyInput(e.target.value)} placeholder="Your G2G API key"
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-zinc-200 focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500 transition-all text-sm font-mono" required />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">API Secret</label>
+              <input type="password" value={secretInput} onChange={e => setSecretInput(e.target.value)} placeholder="Your G2G API secret"
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-zinc-200 focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500 transition-all text-sm font-mono" required />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Account ID</label>
+              <input value={userInput} onChange={e => setUserInput(e.target.value)} placeholder="Numeric account ID from API Settings"
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-zinc-200 focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500 transition-all text-sm font-mono" />
+              <p className="text-xs text-zinc-600 mt-1">Optional — helps filter your offers</p>
+            </div>
+            <button type="submit" disabled={loading}
+              className="w-full bg-violet-500 hover:bg-violet-600 disabled:opacity-50 text-white font-semibold py-3 rounded-xl transition-all shadow-lg shadow-violet-500/20">
+              {loading ? 'Connecting…' : 'Connect'}
+            </button>
+          </form>
+        </motion.div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-zinc-950">
+      <header className="sticky top-0 z-40 bg-zinc-950/80 backdrop-blur-xl border-b border-zinc-900">
+        <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 bg-violet-500/10 border border-violet-500/20 rounded-lg flex items-center justify-center">
+              <Package className="w-4 h-4 text-violet-500" />
+            </div>
+            <span className="font-bold text-white tracking-tight">G2G</span>
+            <span className="text-xs text-zinc-500 bg-zinc-900 border border-zinc-800 px-2 py-0.5 rounded-full font-mono">{offers.length} offers</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {showJwtInput ? (
+              <div className="flex items-center gap-1.5">
+                <input autoFocus value={jwtInput} onChange={e => setJwtInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') saveJwt(); if (e.key === 'Escape') setShowJwtInput(false); }}
+                  placeholder="Paste G2G session token…"
+                  className="w-64 text-xs bg-zinc-900 border border-violet-500/50 rounded-lg px-3 py-1.5 text-zinc-200 focus:outline-none font-mono" />
+                <button onClick={saveJwt} className="px-3 py-1.5 text-xs bg-violet-500 hover:bg-violet-600 text-white rounded-lg font-semibold transition-all">Save</button>
+                <button onClick={() => setShowJwtInput(false)} className="p-1.5 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded-lg transition-all"><X className="w-3.5 h-3.5" /></button>
+              </div>
+            ) : (
+              <button onClick={() => setShowJwtInput(true)} title="DevTools → Network → any sls.g2g.com request → Request Headers → copy 'authorization' value"
+                className={cn("px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all",
+                  g2gJwt ? "border-emerald-500/30 text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20" : "border-amber-500/30 text-amber-400 bg-amber-500/10 hover:bg-amber-500/20")}>
+                {g2gJwt ? '✓ Session token' : '⚠ Set session token'}
+              </button>
+            )}
+            <button onClick={() => fetchOffers(1)} className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded-lg transition-all">
+              <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
+            </button>
+            <button onClick={handleLogout} className="p-2 text-zinc-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all">
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 py-6">
+        {error && (
+          <div className="mb-4 p-4 bg-red-500/10 border border-red-500/30 rounded-xl flex items-center gap-3 text-red-400 text-sm">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />{error}
+          </div>
+        )}
+        {loading && offers.length === 0 ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4">
+            {Array.from({ length: 12 }).map((_, i) => (
+              <div key={i} className="bg-zinc-900 border border-zinc-800 rounded-xl aspect-[4/5] animate-pulse" />
+            ))}
+          </div>
+        ) : offers.length === 0 ? (
+          <div className="text-center py-20">
+            <Package className="w-16 h-16 text-zinc-800 mx-auto mb-4" />
+            <p className="text-zinc-500 font-bold uppercase tracking-widest text-sm">No offers found</p>
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4">
+              {offers.map(o => (
+                <G2GOfferCard key={o.offer_id} offer={o} onEdit={() => setEditingOffer(o)} onMarket={() => setMarketOffer(o)} />
+              ))}
+            </div>
+            {hasMore && (
+              <div className="mt-6 flex justify-center">
+                <button onClick={() => fetchOffers(page + 1)} disabled={loading}
+                  className="px-6 py-2.5 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-white rounded-xl text-sm font-medium transition-all disabled:opacity-50">
+                  {loading ? 'Loading…' : 'Load more'}
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </main>
+
+      <AnimatePresence>
+        {marketOffer && !editingOffer && (
+          <G2GMarketModal offer={marketOffer} sellerId={g2gUser}
+            onClose={() => setMarketOffer(null)}
+            onEdit={() => { setEditingOffer(marketOffer); setMarketOffer(null); }} />
+        )}
+        {editingOffer && (
+          <G2GEditModal offer={editingOffer} g2gJwt={g2gJwt} g2gUser={g2gUser}
+            onClose={() => setEditingOffer(null)}
+            onUpdate={() => { fetchOffers(1); setEditingOffer(null); }}
+            onNeedJwt={() => { setEditingOffer(null); setShowJwtInput(true); }} />
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'eldorado' | 'gameflip' | 'zeusx'>(() =>
-    (localStorage.getItem('active_tab') as 'eldorado' | 'gameflip' | 'zeusx') || 'eldorado'
+  const [activeTab, setActiveTab] = useState<'eldorado' | 'gameflip' | 'zeusx' | 'g2g'>(() =>
+    (localStorage.getItem('active_tab') as 'eldorado' | 'gameflip' | 'zeusx' | 'g2g') || 'eldorado'
   );
   const [token, setToken] = useState<string | null>(localStorage.getItem('eldorado_token'));
   const [showNotifications, setShowNotifications] = useState(false);
@@ -2107,16 +2641,18 @@ export default function App() {
     setNotifications([]);
   };
 
-  const TAB_LABELS2: Record<string, string> = { eldorado: 'Eldorado', gameflip: 'Gameflip', zeusx: 'ZeusX' };
+  const ALL_TABS = ['eldorado', 'gameflip', 'zeusx', 'g2g'] as const;
+  const TAB_LABELS: Record<string, string> = { eldorado: 'Eldorado', gameflip: 'Gameflip', zeusx: 'ZeusX', g2g: 'G2G' };
+
   if (!token && activeTab === 'eldorado') {
     return (
       <div className="min-h-screen bg-zinc-950">
         <div className="flex justify-center pt-6 gap-2">
-          {(['eldorado', 'gameflip', 'zeusx'] as const).map(t => (
+          {ALL_TABS.map(t => (
             <button key={t} onClick={() => { setActiveTab(t); localStorage.setItem('active_tab', t); }}
               className={cn("px-5 py-2 rounded-xl text-sm font-semibold transition-all",
                 activeTab === t ? "bg-violet-500 text-white shadow-lg shadow-violet-500/20" : "bg-zinc-900 text-zinc-400 hover:text-white border border-zinc-800")}>
-              {TAB_LABELS2[t]}
+              {TAB_LABELS[t]}
             </button>
           ))}
         </div>
@@ -2125,10 +2661,9 @@ export default function App() {
     );
   }
 
-  const TAB_LABELS: Record<string, string> = { eldorado: 'Eldorado', gameflip: 'Gameflip', zeusx: 'ZeusX' };
   const tabBar = (
     <div className="flex justify-center pt-6 pb-0 gap-2 absolute top-0 left-1/2 -translate-x-1/2 z-50">
-      {(['eldorado', 'gameflip', 'zeusx'] as const).map(t => (
+      {ALL_TABS.map(t => (
         <button key={t} onClick={() => { setActiveTab(t); localStorage.setItem('active_tab', t); }}
           className={cn("px-5 py-2 rounded-xl text-sm font-semibold transition-all",
             activeTab === t ? "bg-violet-500 text-white shadow-lg shadow-violet-500/20" : "bg-zinc-900 text-zinc-400 hover:text-white border border-zinc-800")}>
@@ -2152,6 +2687,15 @@ export default function App() {
       <div className="min-h-screen bg-zinc-950">
         {tabBar}
         <ZeusXDashboard />
+      </div>
+    );
+  }
+
+  if (activeTab === 'g2g') {
+    return (
+      <div className="min-h-screen bg-zinc-950">
+        {tabBar}
+        <G2GDashboard />
       </div>
     );
   }
@@ -2186,7 +2730,7 @@ export default function App() {
           </button>
           <div className="h-6 w-[1px] bg-zinc-800" />
           <div className="flex rounded-lg border border-zinc-800 overflow-hidden">
-            {(['eldorado', 'gameflip', 'zeusx'] as const).map(t => (
+            {ALL_TABS.map(t => (
               <button key={t} onClick={() => { setActiveTab(t); localStorage.setItem('active_tab', t); }}
                 className={cn("px-3 py-1.5 text-xs font-semibold transition-all",
                   activeTab === t ? "bg-violet-500 text-white" : "text-zinc-400 hover:text-white")}>

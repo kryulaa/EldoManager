@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>G2G API Sniffer</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0f0f17; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 32px; }
+    h1 { color: #a78bfa; font-size: 22px; margin-bottom: 6px; }
+    p { color: #94a3b8; font-size: 14px; margin-bottom: 24px; }
+    .steps { display: flex; flex-direction: column; gap: 20px; max-width: 640px; }
+    .step { background: #1e1e2e; border: 1px solid #2d2d3d; border-radius: 12px; padding: 20px; }
+    .step h3 { color: #c4b5fd; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
+    .step p { margin-bottom: 12px; font-size: 13px; }
+    code { background: #2d2d3d; color: #86efac; padding: 2px 6px; border-radius: 4px; font-size: 12px; font-family: monospace; }
+    .bm-link { display: inline-block; background: #7c3aed; color: white; padding: 10px 18px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 14px; margin-bottom: 8px; }
+    .bm-link:hover { background: #6d28d9; }
+    .hint { color: #64748b; font-size: 12px; margin-top: 6px; }
+    .console-btn { background: #1e293b; border: 1px solid #334155; color: #94a3b8; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+    .console-btn:hover { background: #334155; color: white; }
+    textarea { width: 100%; height: 80px; background: #0f172a; border: 1px solid #2d2d3d; border-radius: 6px; color: #86efac; font-family: monospace; font-size: 11px; padding: 8px; resize: none; margin-bottom: 8px; }
+    .tag { display: inline-block; background: #134e4a; color: #34d399; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-left: 8px; }
+  </style>
+</head>
+<body>
+  <h1>G2G Edit Sniffer <span class="tag">DEV TOOL</span></h1>
+  <p>Captures the exact API call G2G makes when you edit an offer — shows URL, method, headers, and body.</p>
+  <div class="steps">
+    <div class="step">
+      <h3>Step 1 — Add bookmarklet</h3>
+      <p>Drag the button to your Bookmarks Bar (<code>Ctrl+Shift+B</code>).</p>
+      <a class="bm-link" id="bm-link" href="#">🔍 G2G Edit Sniffer</a>
+    </div>
+    <div class="step">
+      <h3>Step 2 — Go to G2G &amp; activate</h3>
+      <p>Go to <code>g2g.com/offers/list</code>, open DevTools (<code>F12</code>) Console, paste:</p>
+      <textarea id="ta" readonly></textarea>
+      <button class="console-btn" id="copy-btn">Copy script</button>
+    </div>
+    <div class="step">
+      <h3>Step 3 — Edit an offer &amp; save</h3>
+      <p>Edit a listing price or quantity on G2G and click Save. The purple panel shows the exact request — copy the <strong>URL</strong>, <strong>method</strong>, and <strong>body</strong> and paste here.</p>
+    </div>
+  </div>
+
+  <script id="sniffer-source">
+  function __g2gEditSniffer() {
+    if (window.__g2gEditSnifferActive) { console.log('[G2G Sniffer] already active'); return; }
+    window.__g2gEditSnifferActive = true;
+
+    /* ── panel ── */
+    var panel = document.createElement('div');
+    panel.style.cssText = [
+      'position:fixed','top:16px','right:16px','z-index:2147483647',
+      'width:580px','max-height:88vh','overflow-y:auto',
+      'background:#0f0f17','border:1.5px solid #7c3aed','border-radius:12px',
+      'padding:12px','font-family:monospace','font-size:11px','color:#e2e8f0',
+      'box-shadow:0 8px 32px rgba(0,0,0,.7)'
+    ].join(';');
+
+    var hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;cursor:move;user-select:none;';
+    var title = document.createElement('span');
+    title.textContent = '🔍 G2G Edit Sniffer';
+    title.style.cssText = 'color:#a78bfa;font-weight:700;font-size:13px;';
+    var btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:6px;';
+    var clearBtn = document.createElement('button');
+    clearBtn.textContent = 'Clear';
+    clearBtn.style.cssText = 'background:#1e293b;border:1px solid #334155;color:#94a3b8;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px;';
+    clearBtn.addEventListener('click', function() { logEl.innerHTML = ''; });
+    var closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = 'background:#7c3aed;border:none;color:white;padding:2px 8px;border-radius:4px;cursor:pointer;';
+    closeBtn.addEventListener('click', function() { panel.remove(); window.__g2gEditSnifferActive = false; });
+    btnRow.appendChild(clearBtn); btnRow.appendChild(closeBtn);
+    hdr.appendChild(title); hdr.appendChild(btnRow);
+    var logEl = document.createElement('div');
+    panel.appendChild(hdr); panel.appendChild(logEl);
+    document.body.appendChild(panel);
+
+    /* drag */
+    var drag = false, ox = 0, oy = 0;
+    hdr.addEventListener('mousedown', function(e) { drag = true; ox = e.clientX - panel.offsetLeft; oy = e.clientY - panel.offsetTop; });
+    document.addEventListener('mousemove', function(e) { if (!drag) return; panel.style.left = (e.clientX - ox) + 'px'; panel.style.top = (e.clientY - oy) + 'px'; panel.style.right = 'auto'; });
+    document.addEventListener('mouseup', function() { drag = false; });
+
+    function makeEntry(label, bodyStr, hdrsStr, isEdit) {
+      var entry = document.createElement('div');
+      entry.style.cssText = 'margin-bottom:8px;padding:10px;border-radius:8px;'
+        + 'background:' + (isEdit ? '#1e0a3c' : '#0f172a') + ';'
+        + 'border-left:3px solid ' + (isEdit ? '#a78bfa' : '#334155') + ';';
+
+      var lbl = document.createElement('div');
+      lbl.textContent = label;
+      lbl.style.cssText = 'font-weight:700;margin-bottom:4px;color:' + (isEdit ? '#c4b5fd' : '#64748b') + ';word-break:break-all;font-size:11px;';
+      entry.appendChild(lbl);
+
+      function makeSection(heading, text) {
+        if (!text) return;
+        var d = document.createElement('details');
+        if (isEdit) d.open = true;
+        var s = document.createElement('summary');
+        s.textContent = heading;
+        s.style.cssText = 'cursor:pointer;color:#64748b;margin:2px 0 4px;font-size:10px;';
+        var pre = document.createElement('pre');
+        pre.textContent = text;
+        pre.style.cssText = 'margin:0;overflow:auto;max-height:300px;background:#0a0a14;padding:8px;border-radius:6px;color:#86efac;font-size:10px;white-space:pre-wrap;';
+        var cp = document.createElement('button');
+        cp.textContent = '📋 Copy';
+        cp.style.cssText = 'margin-top:4px;background:#1e293b;border:1px solid #334155;color:#94a3b8;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px;';
+        (function(btn, txt) {
+          btn.addEventListener('click', function() {
+            navigator.clipboard.writeText(txt);
+            btn.textContent = 'Copied!';
+            setTimeout(function() { btn.textContent = '📋 Copy'; }, 1500);
+          });
+        })(cp, text);
+        d.appendChild(s); d.appendChild(pre); d.appendChild(cp);
+        entry.appendChild(d);
+      }
+
+      makeSection('Request body', bodyStr);
+      makeSection('Request headers', hdrsStr);
+      logEl.insertBefore(entry, logEl.firstChild);
+    }
+
+    var DOMAINS = ['g2g.com', 'sls.g2g.com', 'open-api.g2g.com'];
+    var EDIT_METHODS = ['PATCH', 'PUT', 'POST'];
+
+    function isG2G(url) { return DOMAINS.some(function(d) { return url.indexOf(d) !== -1; }); }
+    function isWrite(method) { return EDIT_METHODS.indexOf((method || '').toUpperCase()) !== -1; }
+
+    function handleRequest(method, url, reqBody, reqHeaders) {
+      if (!isG2G(url)) return;
+      var isEdit = isWrite(method);
+      var label = method.toUpperCase() + ' ' + url;
+      if (isEdit) {
+        label = '★ EDIT: ' + label;
+        console.log('[G2G Sniffer] EDIT request:', method, url, reqBody, reqHeaders);
+      }
+      var bodyStr = '';
+      try {
+        var parsed = typeof reqBody === 'string' ? JSON.parse(reqBody) : reqBody;
+        bodyStr = JSON.stringify(parsed, null, 2);
+      } catch(e) { bodyStr = reqBody || ''; }
+      makeEntry(label, bodyStr, reqHeaders ? JSON.stringify(reqHeaders, null, 2) : '', isEdit);
+    }
+
+    /* ── intercept XHR ── */
+    var _open = XMLHttpRequest.prototype.open;
+    var _send = XMLHttpRequest.prototype.send;
+    var _setHeader = XMLHttpRequest.prototype.setRequestHeader;
+    XMLHttpRequest.prototype.open = function(m, u) {
+      this.__g2g = { m: m, u: String(u), h: {} };
+      return _open.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.setRequestHeader = function(k, v) {
+      if (this.__g2g) this.__g2g.h[k] = v;
+      return _setHeader.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.send = function(body) {
+      if (this.__g2g && isG2G(this.__g2g.u)) {
+        var m = this.__g2g.m, u = this.__g2g.u, b = body, h = this.__g2g.h;
+        this.addEventListener('loadend', function() { handleRequest(m, u, b, h); });
+      }
+      return _send.apply(this, arguments);
+    };
+
+    /* ── intercept fetch ── */
+    var _fetch = window.fetch;
+    window.fetch = function(url, opts) {
+      opts = opts || {};
+      var urlStr = typeof url === 'string' ? url : (url && url.url) || String(url);
+      var p = _fetch.apply(this, arguments);
+      if (isG2G(urlStr)) {
+        p.then(function(res) {
+          handleRequest(opts.method || 'GET', urlStr, opts.body, opts.headers);
+          return res;
+        });
+      }
+      return p;
+    };
+
+    console.log('[G2G Sniffer] ✓ active — edit an offer on G2G to capture the request');
+  }
+  </script>
+
+  <script>
+    var src = document.getElementById('sniffer-source').textContent.trim();
+    var body = src.replace(/^function\s+__g2gEditSniffer\s*\(\)\s*\{/, '').replace(/\}$/, '').trim();
+    var iife = '(function(){' + body + '})();';
+    document.getElementById('ta').value = iife;
+    document.getElementById('bm-link').href = 'javascript:' + encodeURIComponent(iife);
+    document.getElementById('copy-btn').addEventListener('click', function() {
+      navigator.clipboard.writeText(iife).then(function() {
+        var btn = document.getElementById('copy-btn');
+        btn.textContent = 'Copied!';
+        setTimeout(function() { btn.textContent = 'Copy script'; }, 2000);
+      });
+    });
+  </script>
+</body>
+</html>

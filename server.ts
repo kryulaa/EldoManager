@@ -3,6 +3,7 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import axios from "axios";
 import speakeasy from "speakeasy";
+import crypto from "crypto";
 
 const GF_BASE = "https://production-gameflip.fingershock.com/api/v1";
 
@@ -755,6 +756,195 @@ async function startServer() {
       const r = await axios.get(`${ZX_BASE}/offer/sales-listing`, { headers: zxHeaders(token), params: { offer_status: 'CREATED', sort: 'listed_price:asc', pageSize: 50, ...req.query } });
       res.json(r.data);
     } catch (e: any) { res.status(e.response?.status || 500).json(e.response?.data || { error: 'Failed' }); }
+  });
+
+  // ── G2G routes ────────────────────────────────────────────────────────────────
+  const G2G_BASE = 'https://open-api.g2g.com/v2';
+
+  function g2gCreds(req: express.Request) {
+    const key = (req.headers['x-g2g-key'] as string || '').trim();
+    const secret = (req.headers['x-g2g-secret'] as string || '').trim();
+    const user = (req.headers['x-g2g-user'] as string || '').trim();
+    return key && secret ? { key, secret, user } : null;
+  }
+
+  function g2gSign(urlPath: string, key: string, secret: string, user: string) {
+    const timestamp = Date.now();
+    const canonical = urlPath + key + user + String(timestamp);
+    const signature = crypto.createHmac('sha256', secret).update(canonical).digest('hex');
+    return {
+      'g2g-api-key': key,
+      'g2g-userid': user,
+      'g2g-signature': signature,
+      'g2g-timestamp': String(timestamp),
+      'Content-Type': 'application/json',
+    };
+  }
+
+  app.get('/api/g2g/me', async (req, res) => {
+    const c = g2gCreds(req);
+    if (!c) return res.status(401).json({ error: 'No G2G credentials' });
+    try {
+      const urlPath = '/v2/store';
+      const r = await axios.get(`${G2G_BASE}/store`, { headers: g2gSign(urlPath, c.key, c.secret, c.user) });
+      console.log('[G2G /me] payload keys:', Object.keys(r.data?.payload || {}));
+      res.json(r.data);
+    } catch (e: any) {
+      console.error('[G2G /me]', e.response?.status, JSON.stringify(e.response?.data));
+      res.status(e.response?.status || 500).json(e.response?.data || { error: 'Failed' });
+    }
+  });
+
+  const G2G_BROWSER_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Origin': 'https://www.g2g.com',
+    'Referer': 'https://www.g2g.com/offers/list',
+  };
+
+  app.get('/api/g2g/offers', async (req, res) => {
+    const c = g2gCreds(req);
+    if (!c) return res.status(401).json({ error: 'No G2G credentials' });
+    const page = Number(req.query.page) || 1;
+    const pageSize = Number(req.query.page_size) || 48;
+    const status = (req.query.status as string) || 'live';
+
+    // 1. sls.g2g.com FIRST — returns offer_title_collection_tree needed for images + market search
+    if (c.user) {
+      const slsParams: any = { seller_id: c.user, status, page, page_size: pageSize };
+      for (const url of ['https://sls.g2g.com/offer/search', 'https://sls.g2g.com/offer/list']) {
+        try {
+          console.log(`[G2G offers] trying ${url} seller_id=${c.user}`);
+          const r = await axios.get(url, { headers: G2G_BROWSER_HEADERS, params: slsParams, timeout: 8000 });
+          const results: any[] = r.data?.payload?.results ?? [];
+          console.log(`[G2G offers] ${url} → code=${r.data?.code} results=${results.length}`);
+          if ((r.data?.code === 2000 || r.data?.code === '2000') && results.length > 0) return res.json(r.data);
+        } catch (e: any) {
+          console.log(`[G2G offers] ${url} failed: ${e.response?.status || e.message}`);
+        }
+      }
+    }
+
+    // 2. Fallback: Open API POST /v2/offers/search
+    try {
+      const urlPath = '/v2/offers/search';
+      const body: any = { filter: { status }, page_size: pageSize, page };
+      if (c.user) body.filter.seller_id = c.user;
+      console.log(`[G2G offers] Open API POST body=${JSON.stringify(body)}`);
+      const r = await axios.post(`${G2G_BASE}/offers/search`, body, {
+        headers: { ...g2gSign(urlPath, c.key, c.secret, c.user), 'Content-Type': 'application/json' },
+        timeout: 10000,
+      });
+      const results: any[] = r.data?.payload?.results ?? [];
+      console.log(`[G2G offers] Open API → code=${r.data?.code} results=${results.length}`);
+      return res.json({ code: 2000, payload: { results, total_result: results.length } });
+    } catch (e: any) {
+      console.log(`[G2G offers] Open API failed: ${e.response?.status} ${JSON.stringify(e.response?.data)}`);
+    }
+
+    res.status(502).json({ error: 'Could not load G2G offers — check server log for details' });
+  });
+
+  app.get('/api/g2g/market', async (req, res) => {
+    const fa = (req.query.fa as string || '').trim();
+    const q = (req.query.q as string || '').trim();
+    const brand_id = (req.query.brand_id as string || '').trim();
+
+    // Try sls.g2g.com with exact fa filter (most precise)
+    if (fa) {
+      try {
+        const params: any = { fa, status: 'live', page: 1, page_size: 48 };
+        if (q) params.q = q;
+        console.log(`[G2G market] sls fa=${fa} q=${q}`);
+        const r = await axios.get('https://sls.g2g.com/offer/search', { headers: G2G_BROWSER_HEADERS, params, timeout: 10000 });
+        const results = r.data?.payload?.results ?? [];
+        console.log(`[G2G market] sls → ${results.length} results`);
+        if (r.data?.code === 2000 || r.data?.code === '2000') return res.json(r.data);
+      } catch (e: any) {
+        console.log(`[G2G market] sls failed: ${e.response?.status || e.message}`);
+      }
+    }
+
+    // Fallback: Open API keyword search
+    if (brand_id || q) {
+      try {
+        const body: any = { filter: { status: 'live' }, page_size: 48, page: 1 };
+        if (brand_id) body.filter.brand_id = brand_id;
+        if (q) body.filter.query = q;
+        console.log(`[G2G market] Open API body=${JSON.stringify(body)}`);
+        const r = await axios.post(`${G2G_BASE}/offers/search`, body, {
+          headers: { 'Content-Type': 'application/json' }, timeout: 10000,
+        });
+        const results = r.data?.payload?.results ?? [];
+        console.log(`[G2G market] Open API → ${results.length} results`);
+        return res.json({ code: 2000, payload: { results } });
+      } catch (e: any) {
+        console.log(`[G2G market] Open API failed: ${e.response?.status || e.message}`);
+      }
+    }
+
+    res.status(502).json({ error: 'Could not load market prices' });
+  });
+
+  // sls.g2g.com offer routes (JWT-authenticated, mirrors G2G website)
+  const slsJwtHeaders = (jwt: string) => ({
+    ...G2G_BROWSER_HEADERS,
+    'authorization': jwt,
+    'Content-Type': 'application/json',
+  });
+
+  app.get('/api/g2g/offer-sls/:id', async (req, res) => {
+    const jwt = (req.headers['x-g2g-jwt'] as string || '').trim();
+    try {
+      const r = await axios.get(`https://sls.g2g.com/offer/${req.params.id}`, {
+        headers: jwt ? slsJwtHeaders(jwt) : G2G_BROWSER_HEADERS,
+        timeout: 8000,
+      });
+      res.json(r.data);
+    } catch (e: any) { res.status(e.response?.status || 500).json(e.response?.data || { error: 'Failed' }); }
+  });
+
+  app.patch('/api/g2g/offer-sls/:id', async (req, res) => {
+    const jwt = (req.headers['x-g2g-jwt'] as string || '').trim();
+    if (!jwt) return res.status(401).json({ error: 'G2G session token required (x-g2g-jwt)' });
+    console.log(`[G2G SLS PATCH] /offer/${req.params.id} body=${JSON.stringify(req.body)}`);
+    try {
+      const r = await axios.patch(`https://sls.g2g.com/offer/${req.params.id}`, req.body, {
+        headers: slsJwtHeaders(jwt),
+        timeout: 10000,
+      });
+      console.log(`[G2G SLS PATCH] ${r.status} code=${r.data?.code}`);
+      res.json(r.data);
+    } catch (e: any) {
+      console.error(`[G2G SLS PATCH] ${e.response?.status}`, JSON.stringify(e.response?.data));
+      res.status(e.response?.status || 500).json(e.response?.data || { error: 'Failed' });
+    }
+  });
+
+  app.get('/api/g2g/offer/:id', async (req, res) => {
+    const c = g2gCreds(req);
+    if (!c) return res.status(401).json({ error: 'No G2G credentials' });
+    try {
+      const urlPath = `/v2/offers/${req.params.id}`;
+      const r = await axios.get(`${G2G_BASE}/offers/${req.params.id}`, { headers: g2gSign(urlPath, c.key, c.secret, c.user) });
+      res.json(r.data);
+    } catch (e: any) { res.status(e.response?.status || 500).json(e.response?.data || { error: 'Failed' }); }
+  });
+
+  app.patch('/api/g2g/offer/:id', async (req, res) => {
+    const c = g2gCreds(req);
+    if (!c) return res.status(401).json({ error: 'No G2G credentials' });
+    try {
+      const urlPath = `/v2/offers/${req.params.id}`;
+      console.log(`[G2G PATCH] ${urlPath} body=${JSON.stringify(req.body)}`);
+      const r = await axios.patch(`${G2G_BASE}/offers/${req.params.id}`, req.body, { headers: g2gSign(urlPath, c.key, c.secret, c.user) });
+      console.log(`[G2G PATCH] success ${r.status}`);
+      res.json(r.data);
+    } catch (e: any) {
+      console.error(`[G2G PATCH] ${e.response?.status}`, JSON.stringify(e.response?.data));
+      res.status(e.response?.status || 500).json(e.response?.data || { error: 'Failed' });
+    }
   });
 
   // Vite middleware for development
