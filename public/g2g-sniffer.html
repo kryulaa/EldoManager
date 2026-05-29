@@ -24,22 +24,22 @@
 </head>
 <body>
   <h1>G2G Edit Sniffer <span class="tag">DEV TOOL</span></h1>
-  <p>Captures the exact API call G2G makes when you edit an offer — shows URL, method, headers, and body.</p>
+  <p>Captures G2G API calls — edits (PATCH/PUT/POST) <em>and</em> search/list (GET). Shows URL, params, headers, request body, and response.</p>
   <div class="steps">
     <div class="step">
       <h3>Step 1 — Add bookmarklet</h3>
       <p>Drag the button to your Bookmarks Bar (<code>Ctrl+Shift+B</code>).</p>
-      <a class="bm-link" id="bm-link" href="#">🔍 G2G Edit Sniffer</a>
+      <a class="bm-link" id="bm-link" href="#">🔍 G2G Sniffer</a>
     </div>
     <div class="step">
-      <h3>Step 2 — Go to G2G &amp; activate</h3>
-      <p>Go to <code>g2g.com/offers/list</code>, open DevTools (<code>F12</code>) Console, paste:</p>
+      <h3>Step 2 — Activate on the G2G search page</h3>
+      <p>Go to <code>g2g.com/categories/rbl-item?fa=b08c318c%3Aee1ed7d8&amp;q=sea+dragon</code>, open DevTools (<code>F12</code>) Console, paste the script and press Enter.</p>
       <textarea id="ta" readonly></textarea>
       <button class="console-btn" id="copy-btn">Copy script</button>
     </div>
     <div class="step">
-      <h3>Step 3 — Edit an offer &amp; save</h3>
-      <p>Edit a listing price or quantity on G2G and click Save. The purple panel shows the exact request — copy the <strong>URL</strong>, <strong>method</strong>, and <strong>body</strong> and paste here.</p>
+      <h3>Step 3 — Reload the page</h3>
+      <p>After activating the sniffer, <strong>reload the page</strong>. All sls.g2g.com requests will appear in the panel — look for <strong>🔎 SEARCH</strong> entries (GET requests to offer/search or offer/list). Copy the full URL + params and share.</p>
     </div>
   </div>
 
@@ -52,7 +52,7 @@
     var panel = document.createElement('div');
     panel.style.cssText = [
       'position:fixed','top:16px','right:16px','z-index:2147483647',
-      'width:580px','max-height:88vh','overflow-y:auto',
+      'width:620px','max-height:90vh','overflow-y:auto',
       'background:#0f0f17','border:1.5px solid #7c3aed','border-radius:12px',
       'padding:12px','font-family:monospace','font-size:11px','color:#e2e8f0',
       'box-shadow:0 8px 32px rgba(0,0,0,.7)'
@@ -61,7 +61,7 @@
     var hdr = document.createElement('div');
     hdr.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;cursor:move;user-select:none;';
     var title = document.createElement('span');
-    title.textContent = '🔍 G2G Edit Sniffer';
+    title.textContent = '🔍 G2G Sniffer v3';
     title.style.cssText = 'color:#a78bfa;font-weight:700;font-size:13px;';
     var btnRow = document.createElement('div');
     btnRow.style.cssText = 'display:flex;gap:6px;';
@@ -85,24 +85,76 @@
     document.addEventListener('mousemove', function(e) { if (!drag) return; panel.style.left = (e.clientX - ox) + 'px'; panel.style.top = (e.clientY - oy) + 'px'; panel.style.right = 'auto'; });
     document.addEventListener('mouseup', function() { drag = false; });
 
-    function makeEntry(label, bodyStr, hdrsStr, isEdit) {
+    function fmtJson(str) {
+      try { return JSON.stringify(typeof str === 'string' ? JSON.parse(str) : str, null, 2); }
+      catch(e) { return str || ''; }
+    }
+
+    function makeEntry(method, url, reqBody, reqHeaders, respStatus, respBody) {
+      var isEdit = ['PATCH','PUT','POST'].indexOf((method||'').toUpperCase()) !== -1;
+      var isSrch = isSearch(method, url);
+      var isHighlight = isEdit || isSrch;
+      var bgColor = isEdit ? '#1e0a3c' : isSrch ? '#0a1e2c' : '#0f172a';
+      var borderColor = isEdit ? '#a78bfa' : isSrch ? '#38bdf8' : '#334155';
+      var textColor = isEdit ? '#c4b5fd' : isSrch ? '#7dd3fc' : '#64748b';
+      var badgeBg = isEdit ? '#7c3aed' : isSrch ? '#0369a1' : '#334155';
+      var prefix = isEdit ? '★ EDIT: ' : isSrch ? '🔎 SEARCH: ' : '';
+
       var entry = document.createElement('div');
-      entry.style.cssText = 'margin-bottom:8px;padding:10px;border-radius:8px;'
-        + 'background:' + (isEdit ? '#1e0a3c' : '#0f172a') + ';'
-        + 'border-left:3px solid ' + (isEdit ? '#a78bfa' : '#334155') + ';';
+      entry.style.cssText = 'margin-bottom:10px;padding:10px;border-radius:8px;'
+        + 'background:' + bgColor + ';border-left:3px solid ' + borderColor + ';';
 
       var lbl = document.createElement('div');
-      lbl.textContent = label;
-      lbl.style.cssText = 'font-weight:700;margin-bottom:4px;color:' + (isEdit ? '#c4b5fd' : '#64748b') + ';word-break:break-all;font-size:11px;';
+      lbl.style.cssText = 'font-weight:700;margin-bottom:6px;word-break:break-all;font-size:11px;display:flex;align-items:center;gap:6px;';
+
+      var methodBadge = document.createElement('span');
+      methodBadge.textContent = method.toUpperCase();
+      methodBadge.style.cssText = 'padding:1px 6px;border-radius:3px;font-size:10px;background:' + badgeBg + ';color:white;flex-shrink:0;';
+
+      var urlSpan = document.createElement('span');
+      urlSpan.textContent = prefix + url;
+      urlSpan.style.cssText = 'color:' + textColor + ';';
+      lbl.appendChild(methodBadge); lbl.appendChild(urlSpan);
       entry.appendChild(lbl);
 
-      function makeSection(heading, text) {
+      /* query param highlight for search requests */
+      if (isSrch) {
+        try {
+          var urlObj = new URL(url);
+          var paramStr = '';
+          urlObj.searchParams.forEach(function(v, k) { paramStr += k + '=' + v + '\n'; });
+          if (paramStr) {
+            var paramBadge = document.createElement('div');
+            paramBadge.textContent = '🔍 query params:\n' + paramStr.trim();
+            paramBadge.style.cssText = 'white-space:pre;margin-bottom:6px;padding:4px 8px;background:#0c2233;border:1px solid #0369a1;border-radius:4px;color:#7dd3fc;font-size:10px;font-weight:700;';
+            entry.appendChild(paramBadge);
+          }
+        } catch(e) {}
+      }
+
+      /* qty highlight for edit requests */
+      if (isEdit && reqBody) {
+        try {
+          var parsed = typeof reqBody === 'string' ? JSON.parse(reqBody) : reqBody;
+          var qtyFields = ['qty','api_qty','available_qty','quantity','stock'];
+          var found = [];
+          qtyFields.forEach(function(f) { if (parsed[f] !== undefined) found.push(f + ': ' + parsed[f]); });
+          if (found.length) {
+            var badge = document.createElement('div');
+            badge.textContent = '📦 qty fields → ' + found.join('  |  ');
+            badge.style.cssText = 'margin-bottom:6px;padding:4px 8px;background:#0d2d1a;border:1px solid #16a34a;border-radius:4px;color:#4ade80;font-size:10px;font-weight:700;';
+            entry.appendChild(badge);
+          }
+        } catch(e) {}
+      }
+
+      function makeSection(heading, text, color) {
         if (!text) return;
         var d = document.createElement('details');
         if (isEdit) d.open = true;
         var s = document.createElement('summary');
         s.textContent = heading;
-        s.style.cssText = 'cursor:pointer;color:#64748b;margin:2px 0 4px;font-size:10px;';
+        s.style.cssText = 'cursor:pointer;color:' + (color||'#64748b') + ';margin:2px 0 4px;font-size:10px;font-weight:600;';
         var pre = document.createElement('pre');
         pre.textContent = text;
         pre.style.cssText = 'margin:0;overflow:auto;max-height:300px;background:#0a0a14;padding:8px;border-radius:6px;color:#86efac;font-size:10px;white-space:pre-wrap;';
@@ -120,31 +172,26 @@
         entry.appendChild(d);
       }
 
-      makeSection('Request body', bodyStr);
-      makeSection('Request headers', hdrsStr);
+      makeSection('▶ Request body', fmtJson(reqBody), isEdit ? '#a78bfa' : isSrch ? '#38bdf8' : '#64748b');
+      if (respBody) {
+        var statusColor = (respStatus >= 200 && respStatus < 300) ? '#4ade80' : '#f87171';
+        makeSection('◀ Response (' + respStatus + ')', fmtJson(respBody), statusColor);
+      }
+      if (isHighlight) makeSection('Request headers', reqHeaders ? fmtJson(reqHeaders) : '', '#475569');
       logEl.insertBefore(entry, logEl.firstChild);
+
+      if (isHighlight) console.log('[G2G Sniffer]', prefix, method, url, '\nreq:', reqBody, '\nres:', respBody);
     }
 
     var DOMAINS = ['g2g.com', 'sls.g2g.com', 'open-api.g2g.com'];
-    var EDIT_METHODS = ['PATCH', 'PUT', 'POST'];
-
     function isG2G(url) { return DOMAINS.some(function(d) { return url.indexOf(d) !== -1; }); }
-    function isWrite(method) { return EDIT_METHODS.indexOf((method || '').toUpperCase()) !== -1; }
-
-    function handleRequest(method, url, reqBody, reqHeaders) {
-      if (!isG2G(url)) return;
-      var isEdit = isWrite(method);
-      var label = method.toUpperCase() + ' ' + url;
-      if (isEdit) {
-        label = '★ EDIT: ' + label;
-        console.log('[G2G Sniffer] EDIT request:', method, url, reqBody, reqHeaders);
-      }
-      var bodyStr = '';
-      try {
-        var parsed = typeof reqBody === 'string' ? JSON.parse(reqBody) : reqBody;
-        bodyStr = JSON.stringify(parsed, null, 2);
-      } catch(e) { bodyStr = reqBody || ''; }
-      makeEntry(label, bodyStr, reqHeaders ? JSON.stringify(reqHeaders, null, 2) : '', isEdit);
+    function isSearch(method, url) {
+      return method.toUpperCase() === 'GET' && (
+        url.indexOf('/offer/search') !== -1 ||
+        url.indexOf('/offer/list') !== -1 ||
+        url.indexOf('/offer/keyword') !== -1 ||
+        url.indexOf('/offers/search') !== -1
+      );
     }
 
     /* ── intercept XHR ── */
@@ -162,7 +209,9 @@
     XMLHttpRequest.prototype.send = function(body) {
       if (this.__g2g && isG2G(this.__g2g.u)) {
         var m = this.__g2g.m, u = this.__g2g.u, b = body, h = this.__g2g.h;
-        this.addEventListener('loadend', function() { handleRequest(m, u, b, h); });
+        this.addEventListener('loadend', function() {
+          makeEntry(m, u, b, h, this.status, this.responseText);
+        });
       }
       return _send.apply(this, arguments);
     };
@@ -172,17 +221,19 @@
     window.fetch = function(url, opts) {
       opts = opts || {};
       var urlStr = typeof url === 'string' ? url : (url && url.url) || String(url);
+      if (!isG2G(urlStr)) return _fetch.apply(this, arguments);
       var p = _fetch.apply(this, arguments);
-      if (isG2G(urlStr)) {
-        p.then(function(res) {
-          handleRequest(opts.method || 'GET', urlStr, opts.body, opts.headers);
-          return res;
+      p.then(function(res) {
+        var status = res.status;
+        res.clone().text().then(function(respText) {
+          makeEntry(opts.method || 'GET', urlStr, opts.body, opts.headers, status, respText);
         });
-      }
+        return res;
+      });
       return p;
     };
 
-    console.log('[G2G Sniffer] ✓ active — edit an offer on G2G to capture the request');
+    console.log('[G2G Sniffer v3] ✓ active — reload the page to capture search requests, or edit an offer to capture PATCH requests');
   }
   </script>
 

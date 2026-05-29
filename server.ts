@@ -847,40 +847,95 @@ async function startServer() {
   });
 
   app.get('/api/g2g/market', async (req, res) => {
-    const fa = (req.query.fa as string || '').trim();
-    const q = (req.query.q as string || '').trim();
-    const brand_id = (req.query.brand_id as string || '').trim();
+    const fa         = (req.query.fa         as string || '').trim();
+    const q          = (req.query.q          as string || '').trim();
+    const country    = (req.query.country    as string || 'US').trim();
+    const currency   = (req.query.currency   as string || 'USD').trim();
+    const brand_id   = (req.query.brand_id   as string || '').trim();
+    const service_id = (req.query.service_id as string || '').trim();
+    const cat_id     = (req.query.cat_id     as string || '').trim();
+    const jwt        = (req.headers['x-g2g-jwt'] as string || '').trim();
 
-    // Try sls.g2g.com with exact fa filter (most precise)
-    if (fa) {
-      try {
-        const params: any = { fa, status: 'live', page: 1, page_size: 48 };
-        if (q) params.q = q;
-        console.log(`[G2G market] sls fa=${fa} q=${q}`);
-        const r = await axios.get('https://sls.g2g.com/offer/search', { headers: G2G_BROWSER_HEADERS, params, timeout: 10000 });
-        const results = r.data?.payload?.results ?? [];
-        console.log(`[G2G market] sls → ${results.length} results`);
-        if (r.data?.code === 2000 || r.data?.code === '2000') return res.json(r.data);
-      } catch (e: any) {
-        console.log(`[G2G market] sls failed: ${e.response?.status || e.message}`);
+    console.log(`[G2G market] START fa=${fa} q=${q} country=${country} service_id=${service_id} jwt=${jwt ? 'yes' : 'no'}`);
+
+    const rawJwt = jwt.startsWith('Bearer ') ? jwt.slice(7) : jwt;
+    const jwtBearer = rawJwt ? `Bearer ${rawJwt}` : '';
+    const makeHeaders = (withJwt: boolean) => ({
+      ...G2G_BROWSER_HEADERS,
+      'Referer': 'https://www.g2g.com/',
+      ...(withJwt && rawJwt ? {
+        'authorization': jwtBearer,
+        'Cookie': `long_lived_token=${rawJwt}; G2GSESID_V4=${rawJwt}`,
+      } : {}),
+    });
+
+    const SLS_ENDPOINTS = [
+      'https://sls.g2g.com/offer/search',
+      'https://sls.g2g.com/item/search',
+      'https://sls.g2g.com/offers/search',
+      'https://sls.g2g.com/offer/list',
+    ];
+
+    const slsSearch = async (label: string, params: any, withJwt = false) => {
+      for (const endpoint of SLS_ENDPOINTS) {
+        const ep = endpoint.split('/').slice(-2).join('/');
+        try {
+          console.log(`[G2G market] ${label}@${ep} jwt=${withJwt} params=${JSON.stringify(params)}`);
+          const r = await axios.get(endpoint, {
+            headers: makeHeaders(withJwt), params, timeout: 10000,
+          });
+          const results = r.data?.payload?.results ?? r.data?.payload?.items ?? [];
+          console.log(`[G2G market] ${label}@${ep} → code=${r.data?.code} results=${results.length}`);
+          if (results.length > 0) return r.data;
+        } catch (e: any) {
+          console.log(`[G2G market] ${label}@${ep} failed: ${e.response?.status} ${JSON.stringify(e.response?.data ?? e.message).slice(0, 150)}`);
+        }
       }
+      return null;
+    };
+
+    // seo_term lookup (helps when filter_attr alone isn't enough)
+    let seoTerm = '';
+    for (const [type, id] of [['service', service_id], ['brand', brand_id], ['category', cat_id]]) {
+      if (!id) continue;
+      try {
+        const r = await axios.get(`https://sls.g2g.com/${type}/${id}`, { headers: makeHeaders(true), timeout: 5000 });
+        const found = r.data?.payload?.seo_term ?? r.data?.payload?.seo_alias ?? r.data?.payload?.slug ?? r.data?.payload?.seo;
+        if (found) { seoTerm = found; console.log(`[G2G market] seo_term=${seoTerm} via ${type}/${id}`); break; }
+      } catch { /* not found */ }
     }
 
-    // Fallback: Open API keyword search
-    if (brand_id || q) {
-      try {
-        const body: any = { filter: { status: 'live' }, page_size: 48, page: 1 };
-        if (brand_id) body.filter.brand_id = brand_id;
-        if (q) body.filter.query = q;
-        console.log(`[G2G market] Open API body=${JSON.stringify(body)}`);
-        const r = await axios.post(`${G2G_BASE}/offers/search`, body, {
-          headers: { 'Content-Type': 'application/json' }, timeout: 10000,
-        });
-        const results = r.data?.payload?.results ?? [];
-        console.log(`[G2G market] Open API → ${results.length} results`);
-        return res.json({ code: 2000, payload: { results } });
-      } catch (e: any) {
-        console.log(`[G2G market] Open API failed: ${e.response?.status || e.message}`);
+    const extraParams = service_id ? { service_id } : {};
+
+    // country chain: original country first, then SEA fallbacks, then include_localization=1 variants
+    const seaChain: Array<{ label: string; country: string; currency: string; incl: number }> = [
+      { label: '',     country,  currency,  incl: 0 },
+      { label: 'sg-',  country: 'SG', currency: 'SGD', incl: 0 },
+      { label: 'my-',  country: 'MY', currency: 'MYR', incl: 0 },
+      { label: 'th-',  country: 'TH', currency: 'THB', incl: 0 },
+      { label: 'id-',  country: 'ID', currency: 'IDR', incl: 0 },
+      { label: 'us-',  country: 'US', currency: 'USD', incl: 0 },
+      { label: 'au-',  country: 'AU', currency: 'AUD', incl: 0 },
+      { label: 'sg1-', country: 'SG', currency: 'SGD', incl: 1 },
+      { label: 'us1-', country: 'US', currency: 'USD', incl: 1 },
+    ];
+
+    for (const useJwt of (jwt ? [true, false] : [false])) {
+      for (const { label, country: co, currency: cu, incl } of seaChain) {
+        const pfx = useJwt ? `auth-${label}` : label;
+        const base = { sort: 'recommended_v2', page_size: 48, currency: cu, country: co, include_localization: incl, v: 'v2', ...extraParams };
+        if (seoTerm) {
+          const r = await slsSearch(`${pfx}seo`, { ...base, seo_term: seoTerm, ...(fa ? { filter_attr: fa } : {}), ...(q ? { q } : {}) }, useJwt);
+          if (r) return res.json(r);
+        }
+        if (fa) {
+          const r = await slsSearch(`${pfx}fa`, { ...base, filter_attr: fa, ...(q ? { q } : {}) }, useJwt);
+          if (r) return res.json(r);
+        }
+        if (q) {
+          const r = await slsSearch(`${pfx}q`, { ...base, q }, useJwt);
+          if (r) return res.json(r);
+        }
       }
     }
 
@@ -939,7 +994,7 @@ async function startServer() {
       const urlPath = `/v2/offers/${req.params.id}`;
       console.log(`[G2G PATCH] ${urlPath} body=${JSON.stringify(req.body)}`);
       const r = await axios.patch(`${G2G_BASE}/offers/${req.params.id}`, req.body, { headers: g2gSign(urlPath, c.key, c.secret, c.user) });
-      console.log(`[G2G PATCH] success ${r.status}`);
+      console.log(`[G2G PATCH] success ${r.status} code=${r.data?.code} payload=${JSON.stringify(r.data?.payload)}`);
       res.json(r.data);
     } catch (e: any) {
       console.error(`[G2G PATCH] ${e.response?.status}`, JSON.stringify(e.response?.data));
